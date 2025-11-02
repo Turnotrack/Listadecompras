@@ -1,0 +1,950 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <base target="_top"> <!-- Necesario para Apps Script -->
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🛒 Gestor de Lista de Compras</title>
+    <!-- Carga de Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .strikethrough-content {
+            text-decoration: line-through;
+            color: #9ca3af; /* gray-400 */
+        }
+        /* Oculta la barra de desplazamiento en el historial en móviles */
+        #history-container::-webkit-scrollbar { display: none; }
+        #history-container { -ms-overflow-style: none; /* IE and Edge */ scrollbar-width: none; /* Firefox */ }
+        .alert-modal {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 100;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            background-color: #fef2f2;
+            color: #b91c1c;
+            border: 1px solid #fecaca;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            max-width: 90%;
+            text-align: center;
+        }
+        /* Estilo para el acordeón (details/summary) */
+        details > summary { list-style: none; }
+        details > summary::-webkit-details-marker { display: none; }
+        details > summary::before {
+            content: '►';
+            margin-right: 0.5rem;
+            display: inline-block;
+            transition: transform 0.2s;
+        }
+        details[open] > summary::before {
+            transform: rotate(90deg);
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <!-- NUEVO: Indicador de Pull-to-Refresh -->
+    <div id="pull-to-refresh-indicator" class="fixed top-0 left-0 right-0 h-16 bg-gray-100 flex items-center justify-center text-gray-500 z-0 transform -translate-y-full transition-transform duration-300">
+        <div id="ptr-icon" class="transition-transform duration-300">
+             <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"></path></svg>
+        </div>
+        <div id="ptr-spinner" class="hidden">
+            <svg class="animate-spin h-6 w-6 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+        </div>
+    </div>
+    <div id="app" class="max-w-4xl mx-auto p-4 md:p-6 pb-24">
+        <header class="mb-6 pb-4 border-b border-gray-200">
+            <h1 class="text-3xl font-extrabold text-blue-800 flex items-center">
+                <span class="mr-3">🛒</span> Gestor de Compras
+            </h1>
+            <p id="auth-status" class="text-xs mt-1 text-gray-500 truncate">Conectando a Google Sheets...</p>
+        </header>
+
+        <main>
+            <!-- Lista de Compras (The main list) -->
+            <section class="p-4 bg-white shadow-lg rounded-xl min-h-[300px]">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-xl font-bold text-gray-800">Mi Lista de Compras</h2>
+                    <button onclick="loadData()" class="p-2 text-gray-500 hover:text-blue-600 rounded-full hover:bg-gray-200 transition">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"></path></svg>
+                    </button>
+                </div>
+                
+                <!-- Estado de Carga -->
+                <div id="loader" class="flex flex-col items-center justify-center text-gray-500 pt-10">
+                    <svg class="animate-spin h-8 w-8 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                    <p class="mt-2">Cargando lista...</p>
+                </div>
+
+                <!-- Estado de Lista Vacía -->
+                <div id="list-empty-state" class="hidden flex-col items-center justify-center text-gray-500 text-center pt-10">
+                     <svg class="w-16 h-16 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"></path></svg>
+                    <p class="mt-4 font-semibold">Tu lista está vacía</p>
+                    <p class="text-sm">Usa el botón <span class="font-bold text-blue-600">+</span> para añadir productos.</p>
+                </div>
+
+                <!-- Contenedor de la Lista -->
+                <div id="shopping-list-container" class="hidden">
+                    <!-- Contenido de la lista renderizado aquí -->
+                </div>
+            </section>
+
+            <!-- Resumen e Historial (al final y colapsable) -->
+            <div class="mt-8 space-y-4">
+                <details id="summary-section" class="p-4 bg-white shadow-lg rounded-xl" open>
+                    <summary class="text-xl font-bold text-gray-800 cursor-pointer">Resumen de Gastos</summary>
+                    <div class="mt-4 space-y-2 text-sm border-t pt-4">
+                        <div id="totals-container">
+                            <!-- Totales se renderizan aquí -->
+                            <div class="flex justify-between items-center text-lg font-semibold">
+                                <span>Total Gastado:</span>
+                                <span id="total-spent" class="text-green-600">...</span>
+                            </div>
+                            <div class="flex justify-between text-base mt-1">
+                                <span class="text-gray-600">Hogar:</span>
+                                <span id="total-casa">...</span>
+                            </div>
+                            <div class="flex justify-between text-base">
+                                <span class="text-gray-600">Bebé:</span>
+                                <span id="total-bebe">...</span>
+                            </div>
+                        </div>
+                        <div class="pt-4">
+                             <button id="reset-button" class="w-full px-4 py-2 bg-red-600 text-white font-semibold rounded-lg shadow-md hover:bg-red-700 transition duration-150 disabled:opacity-50" disabled>
+                                Restaurar Lista y Guardar Gasto
+                            </button>
+                        </div>
+                    </div>
+                </details>
+
+                <details id="history-section" class="p-4 bg-white shadow-lg rounded-xl">
+                    <summary class="text-xl font-bold text-gray-800 cursor-pointer">Historial de Gastos</summary>
+                    <div id="history-container" class="text-sm space-y-2 mt-4 max-h-48 overflow-y-auto border-t pt-4">
+                        <!-- Historial se renderiza aquí -->
+                    </div>
+                </details>
+            </div>
+        </main>
+    </div>
+
+    <!-- Botón de Acción Flotante (FAB) y Menú -->
+    <div class="fixed bottom-6 right-6 z-40">
+        <div id="fab-menu" class="mb-2 space-y-2 hidden flex-col items-end">
+             <button id="open-paste-modal-btn" class="flex items-center px-4 py-2 bg-orange-500 text-white font-semibold rounded-full shadow-lg hover:bg-orange-600 transition-transform hover:scale-105">
+                <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"></path></svg>
+                Pegar Lista
+            </button>
+            <button id="open-add-modal-btn" class="flex items-center px-4 py-2 bg-blue-600 text-white font-semibold rounded-full shadow-lg hover:bg-blue-700 transition-transform hover:scale-105">
+                <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v3m0 0v3m0-3h3m-3 0H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                Agregar Producto
+            </button>
+        </div>
+        <button id="fab-toggle" class="w-16 h-16 bg-blue-600 text-white rounded-full flex items-center justify-center shadow-xl hover:bg-blue-700 transition-transform hover:rotate-90">
+            <svg id="fab-icon-plus" class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v12m6-6H6"></path></svg>
+        </button>
+    </div>
+
+    <!-- ========= MODALES ========= -->
+    
+    <!-- Modal para Añadir Producto -->
+    <div id="add-item-modal" class="fixed inset-0 bg-gray-900 bg-opacity-50 hidden items-center justify-center p-4 z-50">
+        <div class="bg-white p-6 rounded-xl shadow-2xl w-full max-w-sm">
+            <h3 class="text-xl font-bold mb-4">Añadir Producto</h3>
+            <div class="space-y-3">
+                <input type="text" id="itemName" placeholder="Nombre del Producto" class="w-full p-2 border border-gray-300 rounded-lg">
+                <div class="flex space-x-2">
+                    <input type="number" step="any" id="itemQtyValue" placeholder="Cant." class="flex-1 p-2 border border-gray-300 rounded-lg">
+                    <select id="itemQtyUnit" class="w-28 p-2 border border-gray-300 rounded-lg bg-white">
+                        <option value="U">U</option>
+                        <option value="Gr">Gr</option>
+                        <option value="Kg">Kg</option>
+                        <option value="Lb">Lb</option>
+                        <option value="L">L</option>
+                    </select>
+                </div>
+                <input type="number" id="itemPrice" placeholder="Precio Total (opcional)" class="w-full p-2 border border-gray-300 rounded-lg">
+                <select id="itemCategory" class="w-full p-2 border border-gray-300 rounded-lg bg-white">
+                    <option value="Casa">Casa</option>
+                    <option value="Bebé">Bebé</option>
+                    <option value="Otro">Otro</option>
+                </select>
+                <input type="text" id="itemStore" list="store-suggestions" placeholder="Tienda" class="w-full p-2 border border-gray-300 rounded-lg">
+            </div>
+            <div class="flex justify-end space-x-3 mt-6">
+                <button id="cancel-add-item" type="button" class="px-4 py-2 bg-gray-300 text-gray-800 rounded-lg hover:bg-gray-400">Cancelar</button>
+                <button id="confirm-add-item" type="button" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Agregar</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Modal para Pegar Lista -->
+    <div id="paste-list-modal" class="fixed inset-0 bg-gray-900 bg-opacity-50 hidden items-center justify-center p-4 z-50">
+         <div class="bg-white p-6 rounded-xl shadow-2xl w-full max-w-sm">
+            <h3 class="text-xl font-bold mb-4">Pegar Lista Completa</h3>
+            <textarea id="list-input" placeholder="Pega aquí tu lista completa (con tiendas y formato)" rows="8" class="w-full p-2 border border-gray-300 rounded-lg"></textarea>
+            <div class="flex justify-end space-x-3 mt-6">
+                <button id="cancel-paste-list" type="button" class="px-4 py-2 bg-gray-300 text-gray-800 rounded-lg hover:bg-gray-400">Cancelar</button>
+                <button id="confirm-paste-list" type="button" class="px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600">Analizar y Añadir</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal de Edición de Producto (Existente) -->
+    <div id="edit-item-modal" class="fixed inset-0 bg-gray-900 bg-opacity-50 hidden items-center justify-center p-4 z-50">
+        <div class="bg-white p-6 rounded-xl shadow-2xl w-full max-w-sm">
+            <h3 class="text-xl font-bold mb-4">Editar Producto</h3>
+            <div class="space-y-3">
+                <input type="hidden" id="editItemId">
+                <label class="text-sm font-medium text-gray-700">Nombre</label>
+                <input type="text" id="editItemName" class="w-full p-2 border border-gray-300 rounded-lg">
+                <label class="text-sm font-medium text-gray-700">Cantidad / Unidad</label>
+                <div class="flex space-x-2">
+                    <input type="number" step="any" id="editItemQtyValue" placeholder="Cant." class="flex-1 p-2 border border-gray-300 rounded-lg">
+                    <select id="editItemQtyUnit" class="w-28 p-2 border border-gray-300 rounded-lg bg-white">
+                        <option value="U">U</option>
+                        <option value="Gr">Gr</option>
+                        <option value="Kg">Kg</option>
+                        <option value="Lb">Lb</option>
+                        <option value="L">L</option>
+                    </select>
+                </div>
+                <label class="text-sm font-medium text-gray-700">Precio Total</label>
+                <input type="number" id="editItemPrice" class="w-full p-2 border border-gray-300 rounded-lg">
+                <label class="text-sm font-medium text-gray-700">Categoría</label>
+                <select id="editItemCategory" class="w-full p-2 border border-gray-300 rounded-lg bg-white">
+                    <option value="Casa">Casa</option><option value="Bebé">Bebé</option><option value="Otro">Otro</option>
+                </select>
+                <label class="text-sm font-medium text-gray-700">Tienda</label>
+                <input type="text" id="editItemStore" list="store-suggestions" class="w-full p-2 border border-gray-300 rounded-lg">
+            </div>
+                <div class="flex justify-between items-center mt-6">
+                    <!-- Botón de Eliminar a la izquierda -->
+                    <button id="delete-item-btn" type="button" class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700">Eliminar</button>
+                    
+                    <!-- Botones de Cancelar y Guardar a la derecha -->
+                    <div class="space-x-3">
+                        <button id="cancel-edit" type="button" class="px-4 py-2 bg-gray-300 text-gray-800 rounded-lg hover:bg-gray-400">Cancelar</button>
+                        <button id="confirm-edit" type="button" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Guardar</button>
+                    </div>
+                </div>
+        </div>
+    </div>
+
+    <!-- Modal para Completar Compra (Existente) -->
+    <div id="complete-purchase-modal" class="fixed inset-0 bg-gray-900 bg-opacity-50 hidden items-center justify-center p-4 z-50">
+        <div class="bg-white p-6 rounded-xl shadow-2xl w-full max-w-sm">
+            <h3 class="text-xl font-bold mb-4">Completar Compra</h3>
+            <div class="space-y-3">
+                <input type="hidden" id="completePurchaseItemId">
+                <p id="complete-purchase-item-name" class="font-medium text-gray-800"></p>
+                <label class="text-sm font-medium text-gray-700">Precio Total</label>
+                <input type="number" id="completePurchasePrice" class="w-full p-2 border border-gray-300 rounded-lg">
+                <label class="text-sm font-medium text-gray-700">Cantidad / Unidad</label>
+                <div class="flex space-x-2">
+                    <input type="number" step="any" id="completePurchaseQtyValue" placeholder="Cant." class="flex-1 p-2 border border-gray-300 rounded-lg">
+                    <select id="completePurchaseQtyUnit" class="w-28 p-2 border border-gray-300 rounded-lg bg-white">
+                        <option value="U">U</option>
+                        <option value="Gr">Gr</option>
+                        <option value="Kg">Kg</option>
+                        <option value="Lb">Lb</option>
+                        <option value="L">L</option>
+                    </select>
+                </div>
+                <label class="text-sm font-medium text-gray-700">Categoría</label>
+                <select id="completePurchaseCategory" class="w-full p-2 border border-gray-300 rounded-lg bg-white">
+                    <option value="Casa">Casa</option><option value="Bebé">Bebé</option><option value="Otro">Otro</option>
+                </select>
+                <label class="text-sm font-medium text-gray-700">Tienda</label>
+                <input type="text" id="completePurchaseStore" list="store-suggestions" placeholder="Escribe o selecciona una tienda" class="w-full p-2 border border-gray-300 rounded-lg">
+                <datalist id="store-suggestions"><!-- Sugerencias --></datalist>
+            </div>
+            <div class="flex justify-end space-x-3 mt-6">
+                <button id="cancel-complete-purchase" type="button" class="px-4 py-2 bg-gray-300 text-gray-800 rounded-lg hover:bg-gray-400">Cancelar</button>
+                <button id="confirm-complete-purchase" type="button" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Guardar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal de Confirmación para Restaurar (Existente) -->
+    <div id="confirm-modal" class="fixed inset-0 bg-gray-900 bg-opacity-50 hidden items-center justify-center p-4 z-50">
+        <div class="bg-white p-6 rounded-xl shadow-2xl w-full max-w-sm">
+            <h3 class="text-xl font-bold mb-4">Confirmar Reinicio</h3>
+            <p class="mb-4">¿Estás seguro de querer reiniciar la lista? Se guardará un registro de <span id="modal-spent-amount"></span> en el historial.</p>
+            <div class="flex justify-end space-x-3">
+                <button id="cancel-reset" class="px-4 py-2 text-gray-600 hover:text-gray-800">Cancelar</button>
+                <button id="confirm-reset" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Confirmar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal de Confirmación para Eliminar Historial -->
+    <div id="delete-history-modal" class="fixed inset-0 bg-gray-900 bg-opacity-50 hidden items-center justify-center p-4 z-50">
+        <div class="bg-white p-6 rounded-xl shadow-2xl w-full max-w-sm">
+            <h3 class="text-xl font-bold mb-4">Confirmar Eliminación</h3>
+            <p class="mb-4">¿Estás seguro de querer eliminar este registro del historial?</p>
+            <input type="hidden" id="delete-history-timestamp">
+            <div class="flex justify-end space-x-3">
+                <button id="cancel-delete-history" class="px-4 py-2 text-gray-600 hover:text-gray-800">Cancelar</button>
+                <button id="confirm-delete-history" class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700">Eliminar</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- El datalist para las tiendas puede estar aquí, se llenará dinámicamente -->
+    <datalist id="store-suggestions"></datalist>    <script>
+    // ========= ESTADO GLOBAL DE LA APLICACIÓN =========
+    let shoppingList = [];
+    let currentEditingId = null;
+    let pendingPurchaseId = null;
+
+    // ========= FUNCIONES DE UTILIDAD Y UI =========
+    function showMessage(title, message) {
+        const existing = document.querySelector('.alert-modal');
+        if (existing) existing.remove();
+        const alertDiv = document.createElement('div');
+        alertDiv.className = 'alert-modal';
+        alertDiv.textContent = message;
+        document.body.appendChild(alertDiv);
+        setTimeout(() => { alertDiv.remove(); }, 3500);
+    }
+
+    function formatCurrency(amount) {
+        if (typeof amount !== 'number') amount = 0;
+        return new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', minimumFractionDigits: 0 }).format(amount);
+    }
+
+    function getUniqueStores() {
+        const allStores = new Set(shoppingList.map(item => item.store));
+        const uniqueStores = Array.from(allStores).filter(store => store && store.trim() && !['General', 'Tienda Sin Asignar', 'Tienda'].includes(store));
+        return uniqueStores.sort();
+    }
+    
+    function populateStoreDatalist() {
+        const storeDatalist = document.getElementById('store-suggestions');
+        storeDatalist.innerHTML = '';
+        const uniqueStores = getUniqueStores();
+        uniqueStores.forEach(storeName => {
+            const option = document.createElement('option');
+            option.value = storeName;
+            storeDatalist.appendChild(option);
+        });
+    }
+
+    // ========= CONEXIÓN CON GOOGLE APPS SCRIPT =========
+    function onActionSuccess(message) { console.log("Acción completada: ", message); }
+    function onActionFailure(error) {
+        console.error("Error en Apps Script:", error);
+        showMessage('Error de Sincronización', `Error del servidor: ${error.message}`);
+    }
+    
+    function saveList(listData) {
+        google.script.run
+            .withSuccessHandler(() => onActionSuccess('Lista guardada.'))
+            .withFailureHandler(onActionFailure)
+            .saveShoppingList(listData || shoppingList);
+    }
+
+    function loadData() {
+        document.getElementById('loader').style.display = 'flex';
+        document.getElementById('shopping-list-container').style.display = 'none';
+        document.getElementById('list-empty-state').style.display = 'none';
+        
+        google.script.run.withSuccessHandler(list => {
+            shoppingList = list;
+            document.getElementById('auth-status').textContent = 'Conexión: Google Sheets (Lista cargada)';
+            renderApp();
+        }).withFailureHandler(error => {
+            onActionFailure(error);
+            document.getElementById('auth-status').textContent = 'Error: Fallo al cargar la lista';
+            renderApp();
+        }).getShoppingList();
+        
+        google.script.run.withSuccessHandler(renderHistory).withFailureHandler(onActionFailure).getHistory();
+    }
+    
+    // ========= LÓGICA DE PARSEO DE LISTA =========
+    function parseInputList(text) {
+        // ... (Esta función se mantiene sin cambios, es la misma que ya tenías)
+        const lines = text.split('\n').map(line => line.trim()).filter(line => line.length > 0);
+        const parsedItems = [];
+        let currentStore = "General";
+        let currentCategory = "";
+        for (const line of lines) {
+            if (line.startsWith('🛒') || line.startsWith('🍽️') || line.startsWith('Subtotal') || line.startsWith('❗')) { continue; }
+            if (line.startsWith('🏬')) {
+                currentStore = line.replace('🏬', '').trim();
+                currentCategory = "";
+                continue;
+            }
+            const isItemLine = /^\[/.test(line) || line.includes('—') || line.includes('-');
+            if (!isItemLine) { currentCategory = line.trim(); continue; }
+            let workingLine = line;
+            let isPurchased = false;
+            let name = '';
+            let quantityDisplay = '1 U';
+            let totalPrice = 0;
+            let expenseCategory = 'Casa';
+            const statusMatch = workingLine.match(/^\s*\[\s*(v|x| )?\s*\]\s*/);
+            if (statusMatch) {
+                isPurchased = statusMatch[1] ? statusMatch[1].toLowerCase() === 'v' : false;
+                workingLine = workingLine.substring(statusMatch[0].length).trim();
+            }
+            if (workingLine.startsWith('-')) { workingLine = workingLine.substring(1).trim(); }
+            const parts = workingLine.split(/\s*—\s*|\s*-\s*/).map(p => p.trim());
+            name = parts[0];
+            if (!name) continue;
+            if (parts.length === 3) {
+                quantityDisplay = parts[1];
+                const priceStr = parts[2];
+                const priceMatch = priceStr.match(/[\d,.]+/);
+                if (priceMatch) {
+                    let priceValue = parseFloat(priceMatch[0].replace(/[,.]/g, ''));
+                    totalPrice = priceValue;
+                    if (priceStr.includes('c/u')) {
+                        const qtyMatch = quantityDisplay.match(/^[\d,.]+/);
+                        if (qtyMatch) {
+                            const quantity = parseFloat(qtyMatch[0].replace(',', '.'));
+                            if (!isNaN(quantity)) { totalPrice = priceValue * quantity; }
+                        }
+                    }
+                }
+            } else if (parts.length === 2) {
+                const secondPart = parts[1];
+                if (secondPart.includes('$')) {
+                    const priceMatch = secondPart.match(/[\d,.]+/);
+                    if (priceMatch) { totalPrice = parseFloat(priceMatch[0].replace(/[,.]/g, '')); }
+                } else { quantityDisplay = secondPart; }
+            }
+            if (currentCategory) { name = `[${currentCategory}] ${name}`; }
+            const lowerCaseName = name.toLowerCase();
+            if (lowerCaseName.includes('bebé') || lowerCaseName.includes('little') || lowerCaseName.includes('pañal')) { expenseCategory = 'Bebé'; }
+            parsedItems.push({
+                id: Date.now() + Math.random().toString(36).substring(2, 9),
+                store: currentStore, name: name, quantityDisplay: quantityDisplay,
+                totalPrice: isNaN(totalPrice) ? 0 : totalPrice,
+                isPurchased: isPurchased, expenseCategory: expenseCategory
+            });
+        }
+        return parsedItems;
+    }
+
+    // ========= LÓGICA DE RENDERIZADO =========
+    function renderShoppingList() {
+        const container = document.getElementById('shopping-list-container');
+        const emptyState = document.getElementById('list-empty-state');
+        container.innerHTML = '';
+        
+        if (shoppingList.length === 0) {
+            emptyState.style.display = 'flex';
+            container.style.display = 'none';
+            return;
+        }
+        emptyState.style.display = 'none';
+        container.style.display = 'block';
+
+        const groupedList = shoppingList.reduce((acc, item) => {
+            const storeName = item.store || 'Tienda Sin Asignar';
+            if (!acc[storeName]) acc[storeName] = [];
+            acc[storeName].push(item);
+            return acc;
+        }, {});
+
+        const storeNames = Object.keys(groupedList);
+        storeNames.sort((storeA, storeB) => {
+            const isStoreAComplete = groupedList[storeA].every(item => item.isPurchased);
+            const isStoreBComplete = groupedList[storeB].every(item => item.isPurchased);
+            return isStoreAComplete - isStoreBComplete;
+        });
+
+        storeNames.forEach(store => {
+            const storeDetails = document.createElement('details');
+            storeDetails.className = 'mb-4 bg-gray-50 rounded-lg shadow-inner overflow-hidden';
+
+            const isStoreComplete = groupedList[store].every(item => item.isPurchased);
+            if (!isStoreComplete) {
+                storeDetails.open = true;
+            }
+
+            const storeSummary = document.createElement('summary');
+            storeSummary.className = 'p-3 text-lg font-bold text-gray-800 cursor-pointer list-none flex justify-between items-center';
+            storeSummary.innerHTML = `<span>🏬 ${store}</span>`;
+            if (isStoreComplete) {
+                 storeSummary.innerHTML += '<span class="text-xs font-bold text-green-600 bg-green-100 px-2 py-1 rounded-full">COMPLETADO</span>';
+            }
+
+            const itemsContainer = document.createElement('div');
+            itemsContainer.className = 'px-3 pb-3 border-t border-gray-200';
+
+            // --- INICIO DE LA NUEVA LÓGICA DE SEPARACIÓN ---
+            // 1. Filtrar productos en dos listas separadas: pendientes y comprados.
+            const pendingItems = groupedList[store].filter(item => !item.isPurchased);
+            const purchasedItems = groupedList[store].filter(item => item.isPurchased);
+
+            // 2. Renderizar la sección de "Faltantes" solo si hay productos pendientes.
+            if (pendingItems.length > 0) {
+                const pendingHeader = document.createElement('h4');
+                pendingHeader.className = 'text-sm font-bold text-red-600 mt-3 mb-1';
+                pendingHeader.textContent = 'Faltantes';
+                itemsContainer.appendChild(pendingHeader);
+                pendingItems.forEach(item => itemsContainer.appendChild(createItemElement(item)));
+            }
+
+            // 3. Renderizar la sección de "Comprados" solo si hay productos comprados, y dentro de un acordeón.
+            if (purchasedItems.length > 0) {
+                const purchasedDetails = document.createElement('details');
+                purchasedDetails.className = 'mt-4';
+                
+                const purchasedSummary = document.createElement('summary');
+                purchasedSummary.className = 'text-sm font-bold text-green-700 cursor-pointer list-none';
+                purchasedSummary.textContent = `Comprados (${purchasedItems.length})`;
+                
+                const purchasedListDiv = document.createElement('div');
+                purchasedItems.forEach(item => purchasedListDiv.appendChild(createItemElement(item)));
+
+                purchasedDetails.appendChild(purchasedSummary);
+                purchasedDetails.appendChild(purchasedListDiv);
+                itemsContainer.appendChild(purchasedDetails);
+            }
+            // --- FIN DE LA NUEVA LÓGICA ---
+            
+            storeDetails.appendChild(storeSummary);
+            storeDetails.appendChild(itemsContainer);
+            container.appendChild(storeDetails);
+        });
+    }
+
+    /**
+     * FUNCIÓN CORREGIDA: Crea el elemento HTML para un solo producto.
+     * Se han corregido las comillas triples (''') por comillas simples (') en los onclick.
+     * @param {object} item - El objeto del producto.
+     * @returns {HTMLElement} El elemento div del producto.
+     */
+    function createItemElement(item) {
+        const itemDiv = document.createElement('div');
+        itemDiv.className = `flex justify-between items-center p-2 rounded-lg transition mt-2 ${item.isPurchased ? 'bg-green-50' : 'bg-white border'}`;
+        const checkIcon = item.isPurchased ? '<svg class="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path></svg>' : '';
+        
+        // CORRECCIÓN: Se cambió '''${item.id}''' a '${item.id}' en las dos líneas siguientes.
+        itemDiv.innerHTML = `
+            <div class="flex-1 min-w-0 pr-2 cursor-pointer flex items-center" onclick="togglePurchased('${item.id}')">
+                <div class="w-5 h-5 mr-3 rounded-full border-2 flex-shrink-0 flex items-center justify-center ${item.isPurchased ? 'bg-green-500 border-green-500' : 'border-gray-400'}">${checkIcon}</div>
+                <div>
+                    <span class="font-medium ${item.isPurchased ? 'strikethrough-content' : 'text-gray-900'}">${item.name}</span>
+                    <p class="text-xs ${item.isPurchased ? 'strikethrough-content' : 'text-gray-500'}">${item.quantityDisplay} | ${item.expenseCategory}</p>
+                </div>
+            </div>
+            <div class="flex items-center">
+                <span class="text-sm font-semibold mr-2 ${item.isPurchased ? 'strikethrough-content' : 'text-blue-600'}">${item.totalPrice > 0 ? formatCurrency(item.totalPrice) : 'Pendiente'}</span>
+                <button class="p-1 text-gray-400 hover:text-blue-600" onclick="openEditModal('${item.id}')">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.5L14.732 3.732z"></path></svg>
+                </button>
+            </div>
+        `;
+        return itemDiv;
+    }
+
+    function renderTotals() {
+        let totalSpent = 0, totalCasa = 0, totalBebe = 0;
+        shoppingList.forEach(item => {
+            const price = parseFloat(item.totalPrice);
+            if (!isNaN(price) && item.isPurchased) {
+                totalSpent += price;
+                if (item.expenseCategory === 'Casa') totalCasa += price;
+                else if (item.expenseCategory === 'Bebé') totalBebe += price;
+            }
+        });
+        document.getElementById('total-spent').textContent = formatCurrency(totalSpent);
+        document.getElementById('total-casa').textContent = formatCurrency(totalCasa);
+        document.getElementById('total-bebe').textContent = formatCurrency(totalBebe);
+        return { totalSpent, breakdown: { Casa: totalCasa, Bebé: totalBebe } };
+    }
+
+    function renderHistory(historyData) {
+        const container = document.getElementById('history-container');
+        container.innerHTML = '';
+        if (!historyData || historyData.length === 0) {
+            container.innerHTML = '<p class="text-gray-500 text-center py-4">No hay registros en el historial.</p>';
+            return;
+        }
+        
+        historyData.forEach((record, index) => {
+            const date = new Date(record.timestamp);
+            const formattedDate = date.toLocaleDateString('es-CO', { 
+                weekday: 'long', 
+                year: 'numeric', 
+                month: 'long', 
+                day: 'numeric' 
+            });
+            const recordDiv = document.createElement('div');
+            recordDiv.className = 'bg-white p-4 rounded-lg shadow mb-3 relative';
+            recordDiv.innerHTML = `
+                <div class="flex justify-between items-start">
+                    <div>
+                        <h4 class="font-semibold text-gray-800">${formattedDate}</h4>
+                        <p class="text-lg font-bold text-blue-600 mt-1">${formatCurrency(record.totalSpent)}</p>
+                        <div class="text-sm text-gray-600 mt-1">
+                            <span class="mr-4">Casa: ${formatCurrency(record.breakdown.Casa)}</span>
+                            <span>Bebé: ${formatCurrency(record.breakdown.Bebé)}</span>
+                        </div>
+                    </div>
+                    <button 
+                        class="text-red-500 hover:text-red-700 p-2" 
+                        onclick="openDeleteHistoryModal(${record.timestamp})"
+                        title="Eliminar registro">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                    </button>
+                </div>
+            `;
+            container.appendChild(recordDiv);
+        });
+    }
+
+            function renderApp() {
+                document.getElementById('loader').style.display = 'none';
+                const totals = renderTotals();
+                renderShoppingList();
+                populateStoreDatalist();
+                document.getElementById('reset-button').disabled = totals.totalSpent === 0;
+    
+                // --- NUEVO: Lógica para resetear el indicador de Pull-to-Refresh ---
+                if (isRefreshing) {
+                    const indicator = document.getElementById('pull-to-refresh-indicator');
+                    // Ocultar el indicador con una transición
+                    indicator.style.transform = 'translateY(-100%)';
+                    
+                    // Después de que la animación de ocultar termine, resetear los iconos
+                    setTimeout(() => {
+                        const icon = document.getElementById('ptr-icon');
+                        const spinner = document.getElementById('ptr-spinner');
+                        icon.style.display = 'block';
+                        icon.style.transform = 'rotate(0deg)';
+                        spinner.style.display = 'none';
+                        isRefreshing = false; // Permitir el siguiente refresh
+                    }, 300); // 300ms debe coincidir con la duración de la transición en el CSS
+                }
+            }
+    // ========= MANEJO DE EVENTOS Y ACCIONES =========
+
+    // --- Lógica de Modales ---
+    function openModal(modalId) { document.getElementById(modalId).classList.remove('hidden'); document.getElementById(modalId).classList.add('flex'); }
+    function closeModal(modalId) { document.getElementById(modalId).classList.add('hidden'); document.getElementById(modalId).classList.remove('flex'); }
+
+    // --- Toggle de Compra ---
+    function togglePurchased(id) {
+        const index = shoppingList.findIndex(item => item.id === id);
+        if (index === -1) return;
+        const item = shoppingList[index];
+        const isNowPurchasing = !item.isPurchased;
+        const genericStores = ['General', 'Tienda Sin Asignar', 'Tienda', ''];
+        const needsDataCompletion = item.totalPrice === 0 || genericStores.includes(item.store);
+        
+        if (isNowPurchasing && needsDataCompletion) {
+            pendingPurchaseId = id;
+            openCompletePurchaseModal(id);
+            return;
+        }
+        shoppingList[index].isPurchased = isNowPurchasing;
+        saveList();
+        renderApp();
+    }
+    
+    // --- Añadir Producto ---
+    function handleAddItem() {
+        const name = document.getElementById('itemName').value.trim();
+        const qtyVal = document.getElementById('itemQtyValue').value.trim();
+        const qtyUnit = document.getElementById('itemQtyUnit').value || 'U';
+    const qty = (qtyVal && qtyVal !== '') ? `${qtyVal} ${qtyUnit.toLowerCase()}` : `1 ${qtyUnit.toLowerCase()}`;
+        const price = parseFloat(document.getElementById('itemPrice').value) || 0;
+        const category = document.getElementById('itemCategory').value;
+        const store = document.getElementById('itemStore').value.trim() || 'General';
+        
+        if (!name) { showMessage('Faltan Datos', 'El nombre del producto es obligatorio.'); return; }
+        
+        shoppingList.push({
+            id: Date.now() + Math.random().toString(36).substring(2, 9),
+            store, name, quantityDisplay: qty, totalPrice: price, isPurchased: false, expenseCategory: category
+        });
+        saveList();
+        renderApp();
+        closeModal('add-item-modal');
+        document.getElementById('itemName').value = '';
+        document.getElementById('itemQtyValue').value = '';
+        document.getElementById('itemQtyUnit').value = 'U';
+        document.getElementById('itemPrice').value = '';
+        document.getElementById('itemStore').value = '';
+    }
+    
+    // --- Pegar Lista ---
+    function handlePasteList() {
+        const text = document.getElementById('list-input').value;
+        if (!text) { showMessage('Lista Vacía', 'Pega el texto de tu lista.'); return; }
+        const newItems = parseInputList(text);
+        if (newItems.length > 0) {
+            shoppingList = [...shoppingList, ...newItems];
+            saveList();
+            renderApp();
+            showMessage('Lista Analizada', `Se agregaron ${newItems.length} productos.`);
+            document.getElementById('list-input').value = '';
+            closeModal('paste-list-modal');
+        } else {
+            showMessage('Análisis Fallido', 'No se encontraron productos válidos.');
+        }
+    }
+    
+    // --- Editar Producto ---
+    function openEditModal(id) {
+        const item = shoppingList.find(i => i.id === id);
+        if (!item) return;
+        currentEditingId = id;
+        document.getElementById('editItemId').value = id;
+        document.getElementById('editItemName').value = item.name;
+        // Descomponer quantityDisplay en valor y unidad si es posible
+        const qtyMatch = String(item.quantityDisplay || '').trim().match(/^([\d.,]+)\s*(\w+)?/);
+        if (qtyMatch) {
+            document.getElementById('editItemQtyValue').value = qtyMatch[1];
+            document.getElementById('editItemQtyUnit').value = (qtyMatch[2] || 'U');
+        } else {
+            document.getElementById('editItemQtyValue').value = '';
+            document.getElementById('editItemQtyUnit').value = 'U';
+        }
+        document.getElementById('editItemPrice').value = item.totalPrice;
+        document.getElementById('editItemCategory').value = item.expenseCategory;
+        document.getElementById('editItemStore').value = item.store;
+        openModal('edit-item-modal');
+    }
+    
+    function handleUpdateItem() {
+        if (!currentEditingId) return;
+        const index = shoppingList.findIndex(item => item.id === currentEditingId);
+        if (index === -1) return;
+
+        const name = document.getElementById('editItemName').value.trim();
+        if (!name) { showMessage('Error', 'El nombre no puede estar vacío.'); return; }
+    const qtyVal = document.getElementById('editItemQtyValue').value.trim();
+    const qtyUnit = document.getElementById('editItemQtyUnit').value || 'U';
+    const quantityDisplay = (qtyVal && qtyVal !== '') ? `${qtyVal} ${qtyUnit.toLowerCase()}` : `1 ${qtyUnit.toLowerCase()}`;
+
+        shoppingList[index] = {
+            ...shoppingList[index],
+            name: name,
+            quantityDisplay: quantityDisplay,
+            totalPrice: parseFloat(document.getElementById('editItemPrice').value) || 0,
+            expenseCategory: document.getElementById('editItemCategory').value,
+            store: document.getElementById('editItemStore').value.trim(),
+        };
+        
+        saveList();
+        renderApp();
+        closeModal('edit-item-modal');
+    }
+
+    // --- Eliminar Producto ---
+    function handleDeleteItem() {
+        if (!currentEditingId) return;
+        const idx = shoppingList.findIndex(i => i.id === currentEditingId);
+        if (idx === -1) return;
+        const name = shoppingList[idx].name || 'este producto';
+        if (!confirm(`¿Eliminar ${name}? Esta acción no se puede deshacer.`)) return;
+        shoppingList.splice(idx, 1);
+        currentEditingId = null;
+        saveList();
+        renderApp();
+        closeModal('edit-item-modal');
+    }
+
+    // --- Completar Compra ---
+    function openCompletePurchaseModal(id) {
+        const item = shoppingList.find(i => i.id === id);
+        if (!item) return;
+        document.getElementById('completePurchaseItemId').value = id;
+        document.getElementById('complete-purchase-item-name').textContent = item.name;
+        document.getElementById('completePurchasePrice').value = item.totalPrice > 0 ? item.totalPrice : '';
+        // Descomponer quantityDisplay
+        const qtyMatch = String(item.quantityDisplay || '').trim().match(/^([\d.,]+)\s*(\w+)?/);
+        if (qtyMatch) {
+            document.getElementById('completePurchaseQtyValue').value = qtyMatch[1];
+            document.getElementById('completePurchaseQtyUnit').value = (qtyMatch[2] || 'U');
+        } else {
+            document.getElementById('completePurchaseQtyValue').value = '';
+            document.getElementById('completePurchaseQtyUnit').value = 'U';
+        }
+        document.getElementById('completePurchaseCategory').value = item.expenseCategory;
+        const storeInput = document.getElementById('completePurchaseStore');
+        storeInput.value = (item.store && !['General', 'Tienda Sin Asignar', 'Tienda'].includes(item.store)) ? item.store : '';
+        openModal('complete-purchase-modal');
+    }
+
+    function handleCompletePurchase() {
+        const id = document.getElementById('completePurchaseItemId').value;
+        const index = shoppingList.findIndex(i => i.id === id);
+        if (index === -1) return;
+
+        const price = parseFloat(document.getElementById('completePurchasePrice').value);
+        const store = document.getElementById('completePurchaseStore').value.trim();
+
+        if (isNaN(price) || price <= 0) { showMessage('Dato Requerido', 'Introduce un precio válido.'); return; }
+        if (!store) { showMessage('Dato Requerido', 'Introduce la tienda.'); return; }
+
+    const qtyVal = document.getElementById('completePurchaseQtyValue').value.trim();
+    const qtyUnit = document.getElementById('completePurchaseQtyUnit').value || 'U';
+    const quantityDisplay = (qtyVal && qtyVal !== '') ? `${qtyVal} ${qtyUnit.toLowerCase()}` : `1 ${qtyUnit.toLowerCase()}`;
+
+        shoppingList[index] = {
+            ...shoppingList[index],
+            totalPrice: price,
+            quantityDisplay: quantityDisplay,
+            expenseCategory: document.getElementById('completePurchaseCategory').value,
+            store: store,
+            isPurchased: true
+        };
+
+        pendingPurchaseId = null;
+        saveList();
+        renderApp();
+        closeModal('complete-purchase-modal');
+    }
+    
+        // --- Resetear Lista ---
+    function handleReset() {
+        const totals = renderTotals();
+        document.getElementById('reset-button').textContent = 'Guardando...';
+        
+        // Primero registramos el historial
+        google.script.run.withSuccessHandler(() => {
+            // Después limpiamos la lista
+            const newList = shoppingList.filter(item => !item.isPurchased);
+            shoppingList = newList;
+            google.script.run.withSuccessHandler(() => {
+                document.getElementById('reset-button').textContent = 'Reiniciar Lista';
+                loadData();
+            }).withFailureHandler(onActionFailure).saveShoppingList(newList);
+        }).withFailureHandler(onActionFailure).logHistory(totals);
+    }
+
+    // --- Eliminar Registro de Historial ---
+    function openDeleteHistoryModal(timestamp) {
+        document.getElementById('delete-history-timestamp').value = timestamp;
+        openModal('delete-history-modal');
+    }
+
+    function handleDeleteHistoryRecord() {
+        const timestamp = parseInt(document.getElementById('delete-history-timestamp').value);
+        if (!timestamp) return;
+
+        google.script.run
+            .withSuccessHandler(() => {
+                closeModal('delete-history-modal');
+                loadData(); // Recargar el historial
+                showMessage('Éxito', 'Registro eliminado correctamente');
+            })
+            .withFailureHandler(error => {
+                closeModal('delete-history-modal');
+                showMessage('Error', 'No se pudo eliminar el registro');
+            })
+            .deleteHistoryRecord(timestamp);
+    }
+
+    // ========= LISTENERS DE INICIALIZACIÓN =========
+    window.onload = loadData;
+
+    // --- FAB ---
+    document.getElementById('fab-toggle').addEventListener('click', () => {
+        document.getElementById('fab-menu').classList.toggle('hidden');
+    });
+    document.getElementById('open-add-modal-btn').addEventListener('click', () => openModal('add-item-modal'));
+    document.getElementById('open-paste-modal-btn').addEventListener('click', () => openModal('paste-list-modal'));
+    
+    // --- Modales ---
+    document.getElementById('confirm-add-item').addEventListener('click', handleAddItem);
+    document.getElementById('cancel-add-item').addEventListener('click', () => closeModal('add-item-modal'));
+    document.getElementById('confirm-paste-list').addEventListener('click', handlePasteList);
+    document.getElementById('cancel-paste-list').addEventListener('click', () => closeModal('paste-list-modal'));
+    document.getElementById('confirm-edit').addEventListener('click', handleUpdateItem);
+    document.getElementById('cancel-edit').addEventListener('click', () => closeModal('edit-item-modal'));
+    document.getElementById('delete-item-btn').addEventListener('click', handleDeleteItem);
+    document.getElementById('confirm-complete-purchase').addEventListener('click', handleCompletePurchase);
+    document.getElementById('cancel-complete-purchase').addEventListener('click', () => closeModal('complete-purchase-modal'));
+    document.getElementById('reset-button').addEventListener('click', () => {
+        const { totalSpent } = renderTotals();
+        document.getElementById('modal-spent-amount').textContent = formatCurrency(totalSpent);
+        openModal('confirm-modal');
+    });
+    document.getElementById('confirm-reset').addEventListener('click', () => { closeModal('confirm-modal'); handleReset(); });
+    document.getElementById('cancel-reset').addEventListener('click', () => closeModal('confirm-modal'));
+    
+    // Event listeners para el modal de eliminar historial
+    document.getElementById('confirm-delete-history').addEventListener('click', handleDeleteHistoryRecord);
+    document.getElementById('cancel-delete-history').addEventListener('click', () => closeModal('delete-history-modal'));
+            // ========= LÓGICA DE PULL-TO-REFRESH =========
+            let touchStartY = 0;
+            let isRefreshing = false;
+            const pullThreshold = 80; // Distancia en píxeles para activar el refresh
+    
+            const ptrIndicator = document.getElementById('pull-to-refresh-indicator');
+            const ptrIcon = document.getElementById('ptr-icon');
+            const ptrSpinner = document.getElementById('ptr-spinner');
+    
+            document.addEventListener('touchstart', (e) => {
+                // Solo registrar el inicio si no estamos ya refrescando y estamos en la parte superior
+                if (window.scrollY === 0 && !isRefreshing) {
+                    touchStartY = e.touches[0].clientY;
+                } else {
+                    touchStartY = 0; // Resetear si no estamos en la parte superior
+                }
+            }, { passive: true });
+    
+            document.addEventListener('touchmove', (e) => {
+                if (touchStartY === 0 || isRefreshing) return;
+    
+                const currentY = e.touches[0].clientY;
+                const diffY = currentY - touchStartY;
+    
+                // Si se está jalando hacia abajo desde la parte superior
+                if (diffY > 0 && window.scrollY === 0) {
+                    // Prevenir el comportamiento por defecto del navegador (como el overscroll de Chrome)
+                    e.preventDefault(); 
+                    
+                    // Mover el indicador a la vista
+                    ptrIndicator.style.transform = `translateY(0)`;
+                    
+                    // Girar la flecha si se ha jalado lo suficiente
+                    if (diffY > pullThreshold) {
+                        ptrIcon.style.transform = 'rotate(180deg)';
+                    } else {
+                        ptrIcon.style.transform = 'rotate(0deg)';
+                    }
+                }
+            }, { passive: false }); // passive: false es necesario para usar preventDefault()
+    
+            document.addEventListener('touchend', (e) => {
+                if (touchStartY === 0 || isRefreshing) return;
+    
+                const currentY = e.changedTouches[0].clientY;
+                const diffY = currentY - touchStartY;
+                
+                // Si se soltó el dedo después de jalar lo suficiente
+                if (diffY > pullThreshold && window.scrollY === 0) {
+                    isRefreshing = true;
+                    ptrIcon.style.display = 'none';
+                    ptrSpinner.style.display = 'block';
+                    ptrIndicator.style.transform = 'translateY(0)'; // Asegurarse de que el spinner sea visible
+                    
+                    // Llamar a la función para recargar los datos
+                    loadData();
+                } else if (diffY > 0) {
+                    // Si no se jaló lo suficiente, simplemente ocultar el indicador
+                    ptrIndicator.style.transform = 'translateY(-100%)';
+                }
+    
+                // Resetear la posición de inicio
+                touchStartY = 0;
+            });
+    
+            </script></body>
+</html>
